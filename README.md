@@ -10,8 +10,6 @@ Code processes running in its windows:
 - 🔴 **red (waiting)** — Claude is at a permission prompt
 - *no dot* — no Claude in this session
 
-<img width="1273" height="650" alt="image" src="https://github.com/user-attachments/assets/a8f0ea73-c449-4bbb-b99a-7781afa0d5a5" />
-
 
 Two pickers ship with the package:
 
