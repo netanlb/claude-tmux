@@ -85,15 +85,41 @@ list_rows() {
     done <<< "$sorted"
 }
 
+remove_worktree() {
+    # Remove a git worktree cleanly: locate its source repo via the .git
+    # pointer file, then `git worktree remove --force`. Falls back to rm -rf
+    # if the dir isn't a worktree (or removal fails).
+    local wt=$1
+    [[ -d "$wt" ]] || return
+    local gitfile="$wt/.git"
+    if [[ -f "$gitfile" ]]; then
+        local gitdir source_repo
+        gitdir=$(sed -n 's/^gitdir: //p' "$gitfile")
+        if [[ -n "$gitdir" ]]; then
+            source_repo="${gitdir%/.git/worktrees/*}"
+            if git -C "$source_repo" worktree remove --force "$wt" 2>/dev/null; then
+                return
+            fi
+        fi
+    fi
+    rm -rf "$wt"
+}
+
 confirm_kill_session() {
     local sess=$1
     [[ -z "$sess" ]] && return
-    printf 'kill %s? [y/N] ' "$sess"
+    local wt="$HOME/claude-worktrees/$sess"
+    if [[ -d "$wt" ]]; then
+        printf 'kill %s + remove worktree %s? [y/N] ' "$sess" "$wt"
+    else
+        printf 'kill %s? [y/N] ' "$sess"
+    fi
     local a
     read -n 1 -r a
     echo
     if [[ "$a" == "y" || "$a" == "Y" ]]; then
         tmux kill-session -t "$sess"
+        [[ -d "$wt" ]] && remove_worktree "$wt"
     fi
 }
 
