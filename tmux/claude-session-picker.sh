@@ -86,41 +86,61 @@ list_rows() {
 }
 
 remove_worktree() {
-    # Remove a git worktree cleanly: locate its source repo via the .git
-    # pointer file, then `git worktree remove --force`. Falls back to rm -rf
-    # if the dir isn't a worktree (or removal fails).
+    # Delete the worktree in the BACKGROUND — rm -rf can take a long time on
+    # dirs containing node_modules etc., and we don't want the popup to block
+    # on it. After deletion, `git worktree prune` cleans up the orphan ref
+    # in the source repo. The popup returns to the picker immediately.
     local wt=$1
     [[ -d "$wt" ]] || return
-    local gitfile="$wt/.git"
-    if [[ -f "$gitfile" ]]; then
-        local gitdir source_repo
-        gitdir=$(sed -n 's/^gitdir: //p' "$gitfile")
-        if [[ -n "$gitdir" ]]; then
-            source_repo="${gitdir%/.git/worktrees/*}"
-            if git -C "$source_repo" worktree remove --force "$wt" 2>/dev/null; then
-                return
-            fi
-        fi
+
+    # Read the source repo from the .git pointer before we hand off to bg.
+    local source_repo=""
+    if [[ -f "$wt/.git" ]]; then
+        local gitdir
+        gitdir=$(sed -n 's/^gitdir: //p' "$wt/.git")
+        [[ -n "$gitdir" ]] && source_repo="${gitdir%/.git/worktrees/*}"
     fi
-    rm -rf "$wt"
+
+    echo "removing $wt in background…"
+    (
+        rm -rf "$wt"
+        [[ -n "$source_repo" ]] && git -C "$source_repo" worktree prune
+    ) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null
 }
 
 confirm_kill_session() {
     local sess=$1
     [[ -z "$sess" ]] && return
+
+    # Refuse to kill the session hosting this popup — would orphan the popup
+    # and leave the screen looking stuck.
+    local current
+    current=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+    if [[ "$sess" == "$current" ]]; then
+        echo "cannot kill the current session ($current) from inside it"
+        echo "press any key…"
+        read -r -n 1
+        return
+    fi
+
+    local a kill_it=0 wipe_wt=0
     local wt="$HOME/claude-worktrees/$sess"
+
+    printf 'kill session %s? [y/N] ' "$sess"
+    read -r a
+    [[ "$a" == "y" || "$a" == "Y" ]] || return
+    kill_it=1
+
     if [[ -d "$wt" ]]; then
-        printf 'kill %s + remove worktree %s? [y/N] ' "$sess" "$wt"
-    else
-        printf 'kill %s? [y/N] ' "$sess"
+        printf 'remove worktree %s? [y/N] ' "$wt"
+        read -r a
+        [[ "$a" == "y" || "$a" == "Y" ]] && wipe_wt=1
     fi
-    local a
-    read -n 1 -r a
-    echo
-    if [[ "$a" == "y" || "$a" == "Y" ]]; then
-        tmux kill-session -t "$sess"
-        [[ -d "$wt" ]] && remove_worktree "$wt"
-    fi
+
+    # Defer destructive actions until both confirms are collected.
+    (( kill_it ))  && tmux kill-session -t "$sess"
+    (( wipe_wt ))  && remove_worktree "$wt"
 }
 
 case "${1:-}" in
