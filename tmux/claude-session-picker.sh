@@ -7,6 +7,10 @@ set -uo pipefail
 
 SELF="${BASH_SOURCE[0]}"
 
+# A session detached longer than this (seconds) is considered abandoned, and its
+# node app-server processes get reaped. Default 3h; override via env.
+IDLE_NODE_SECS=${CLAUDE_TMUX_IDLE_SECS:-10800}
+
 color_dot() {
     case "$1" in
         waiting)  printf '\e[31m●\e[0m' ;;
@@ -143,12 +147,61 @@ confirm_kill_session() {
     (( wipe_wt ))  && remove_worktree "$wt"
 }
 
+# Recursively emit all descendant PIDs of a process.
+descendant_pids() {
+    local pid=$1 child
+    while IFS= read -r child; do
+        [[ -z "$child" ]] && continue
+        echo "$child"
+        descendant_pids "$child"
+    done < <(pgrep -P "$pid" 2>/dev/null)
+}
+
+# Reap node app-server processes from sessions detached longer than $1 seconds
+# (default IDLE_NODE_SECS). The tmux session, its windows and shells are left
+# intact — only the node processes inside its panes are killed, freeing CPU/RAM.
+# Claude itself is spared (any node process whose command mentions "claude").
+# Attached sessions are skipped, so the session hosting this popup is safe.
+reap_idle_node() {
+    local threshold=${1:-$IDLE_NODE_SECS} now name attached last_att age
+    now=$(date +%s)
+
+    while IFS='|' read -r name attached last_att; do
+        [[ -z "$name" ]] && continue
+        (( attached > 0 )) && continue
+        [[ -z "$last_att" || "$last_att" -le 0 ]] && continue
+        age=$(( now - last_att ))
+        (( age < threshold )) && continue
+
+        local pane_pid pid comm cmd pids=()
+        while IFS= read -r pane_pid; do
+            [[ -z "$pane_pid" ]] && continue
+            while IFS= read -r pid; do
+                comm=$(ps -p "$pid" -o comm= 2>/dev/null)
+                [[ "${comm##*/}" == node* ]] || continue
+                cmd=$(ps -p "$pid" -o command= 2>/dev/null)
+                [[ "$cmd" == *claude* ]] && continue   # spare Claude itself
+                pids+=("$pid")
+            done < <(descendant_pids "$pane_pid")
+        done < <(tmux list-panes -s -t "$name" -F '#{pane_pid}' 2>/dev/null)
+
+        if (( ${#pids[@]} )); then
+            kill "${pids[@]}" 2>/dev/null
+            echo "reaped ${#pids[@]} node proc(s) from idle session $name (idle $(human_duration "$age"))"
+        fi
+    done < <(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_last_attached}' 2>/dev/null)
+}
+
 case "${1:-}" in
     --list)
         list_rows
         ;;
     --kill)
         confirm_kill_session "${2:-}"
+        ;;
+    --reap-idle)
+        # Optional arg: idle threshold in HOURS (default IDLE_NODE_SECS).
+        if [[ -n "${2:-}" ]]; then reap_idle_node $(( ${2} * 3600 )); else reap_idle_node; fi
         ;;
     --maybe-reload)
         # Emit a reload action only if any window in any session is "thinking".
@@ -159,6 +212,9 @@ case "${1:-}" in
         fi
         ;;
     *)
+        # Fire-and-forget pass: reap node app-servers from long-idle sessions.
+        # Detached + 3h-idle only, so nothing you're actively using is touched.
+        ( bash "$SELF" --reap-idle >/dev/null 2>&1 & ) </dev/null >/dev/null 2>&1
         list_rows | fzf \
             --ansi \
             --no-sort \

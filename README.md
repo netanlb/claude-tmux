@@ -64,6 +64,18 @@ window where Claude is running.
 The pickers read `@claude_status` across all windows in each session and
 aggregate to a per-session color (priority: waiting > thinking > idle > none).
 
+### Idle node reaping
+
+Each time the picker opens, a background pass reaps **node app-server**
+processes (Vite, Next, etc.) from sessions that have been **detached and idle
+for 3+ hours**. The tmux session, its windows and shells are left intact — only
+the node processes inside its panes are killed, freeing CPU/RAM. Claude itself
+is spared, and attached sessions (including the one hosting the popup) are never
+touched. Idle is measured by `session_last_attached`.
+
+Run it manually any time with `bash tmux/claude-session-picker.sh --reap-idle
+[hours]` (the optional argument overrides the threshold, in hours).
+
 ## Customize
 
 - **Resize the fzf popup** — edit the `bind F display-popup -h H -w W` line
@@ -71,6 +83,8 @@ aggregate to a per-session color (priority: waiting > thinking > idle > none).
 - **Change the auto-reload interval** — edit the `sleep N` in the
   `--maybe-reload` branch of `tmux/claude-session-picker.sh`. Default `1`.
 - **Change the colors** — `color_dot()` in the picker script.
+- **Change the idle-reap threshold** — set `CLAUDE_TMUX_IDLE_SECS` (seconds;
+  default `10800` = 3h), or pass hours to `--reap-idle`.
 
 ## Known limitations
 
