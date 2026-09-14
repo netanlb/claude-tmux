@@ -15,8 +15,8 @@ Two pickers ship with the package:
 
 - `prefix + s` — native tmux `choose-tree`, sessions only, with an aggregated dot
 - `prefix + F` — fzf popup with the same dots, plus sort-by-priority+recency,
-  age column, search/nav modes, kill-with-confirmation, and an auto-reload
-  that ticks only while a session is `thinking`
+  age column, search/nav modes, kill-with-confirmation, and manual reload
+  (`Ctrl-R`)
 
 ## Requirements
 
@@ -80,8 +80,6 @@ Run it manually any time with `bash tmux/claude-session-picker.sh --reap-idle
 
 - **Resize the fzf popup** — edit the `bind F display-popup -h H -w W` line
   in `~/workspace/claude-tmux/tmux/claude-tmux.conf`.
-- **Change the auto-reload interval** — edit the `sleep N` in the
-  `--maybe-reload` branch of `tmux/claude-session-picker.sh`. Default `1`.
 - **Change the colors** — `color_dot()` in the picker script.
 - **Change the idle-reap threshold** — set `CLAUDE_TMUX_IDLE_SECS` (seconds;
   default `10800` = 3h), or pass hours to `--reap-idle`.

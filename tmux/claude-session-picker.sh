@@ -203,14 +203,6 @@ case "${1:-}" in
         # Optional arg: idle threshold in HOURS (default IDLE_NODE_SECS).
         if [[ -n "${2:-}" ]]; then reap_idle_node $(( ${2} * 3600 )); else reap_idle_node; fi
         ;;
-    --maybe-reload)
-        # Emit a reload action only if any window in any session is "thinking".
-        # When nothing is thinking, no action is emitted → fzf has no pending
-        # background work → no spinner activity.
-        if tmux list-windows -aF '#{@claude_status}' 2>/dev/null | grep -q '^thinking$'; then
-            echo "reload(sleep 1; bash $SELF --list)"
-        fi
-        ;;
     *)
         # Fire-and-forget pass: reap node app-servers from long-idle sessions.
         # Detached + 3h-idle only, so nothing you're actively using is touched.
@@ -219,7 +211,7 @@ case "${1:-}" in
             --ansi \
             --no-sort \
             --track \
-            --info=inline-right \
+            --info=hidden \
             --delimiter=$'\t' \
             --with-nth=1 \
             --reverse \
@@ -233,7 +225,6 @@ case "${1:-}" in
             --bind='change:transform-query:[ "$FZF_PROMPT" = "nav> " ] && echo "" || echo {q}' \
             --bind='esc:transform:[ "$FZF_PROMPT" = "search> " ] && echo "disable-search+change-prompt(nav> )+rebind(j,k,x,i)+clear-query" || echo "abort"' \
             --bind="ctrl-r:reload(bash $SELF --list)" \
-            --bind="load:transform:bash $SELF --maybe-reload" \
             | cut -f2- \
             | { read -r target; [[ -n "$target" ]] && tmux switch-client -t "$target"; }
         ;;
