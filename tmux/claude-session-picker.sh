@@ -20,6 +20,17 @@ color_dot() {
     esac
 }
 
+role_tag() {
+    # Render the session's cwt role (set via @claude_role) as a colored tag.
+    # Empty for plain sessions that were not launched with a role.
+    case "$1" in
+        general) printf '  \e[36m[general]\e[0m' ;;
+        worker)  printf '  \e[35m[worker]\e[0m'  ;;
+        '')      : ;;
+        *)       printf '  \e[2m[%s]\e[0m' "$1"   ;;
+    esac
+}
+
 human_duration() {
     local secs=$1
     if   (( secs < 60 ));    then printf '%ds' "$secs"
@@ -47,14 +58,14 @@ session_status() {
 }
 
 list_rows() {
-    local current now name attached status priority
+    local current now name attached role status priority
     current=$(tmux display-message -p '#{session_name}')
     now=$(date +%s)
 
-    # Pass 1: collect tuples (priority<TAB>ts<TAB>name<TAB>status) and measure name width.
+    # Pass 1: collect tuples (priority<TAB>ts<TAB>name<TAB>status<TAB>role) and measure name width.
     # Priority: waiting=0 > thinking=1 > idle=2 > none=3 (lower sorts first).
     local rows=() width=0
-    while IFS='|' read -r name attached; do
+    while IFS='|' read -r name attached role; do
         [[ -z "$name" ]] && continue
         status=$(session_status "$name")
         case "$status" in
@@ -63,17 +74,17 @@ list_rows() {
             idle)     priority=2 ;;
             *)        priority=3 ;;
         esac
-        rows+=("${priority}"$'\t'"${attached:-0}"$'\t'"${name}"$'\t'"${status}")
+        rows+=("${priority}"$'\t'"${attached:-0}"$'\t'"${name}"$'\t'"${status}"$'\t'"${role}")
         (( ${#name} > width )) && width=${#name}
-    done < <(tmux list-sessions -F '#{session_name}|#{session_last_attached}')
+    done < <(tmux list-sessions -F '#{session_name}|#{session_last_attached}|#{@claude_role}')
 
     # Sort by priority asc, then by attach-timestamp desc (most recent first within tier).
     local sorted
     sorted=$(printf '%s\n' "${rows[@]}" | sort -t$'\t' -k1,1n -k2,2nr)
 
-    # Pass 2: render — dot · marker · NAME(left-padded) · gap · age   |   Search: NAME
-    local prio att n s dot marker age
-    while IFS=$'\t' read -r prio att n s; do
+    # Pass 2: render — dot · marker · NAME(left-padded) · gap · age · [role]   |   Search: NAME
+    local prio att n s role dot marker age
+    while IFS=$'\t' read -r prio att n s role; do
         dot=$(color_dot "$s")
         marker=' '
         [[ "$n" == "$current" ]] && marker=$'\e[1;35m›\e[0m'
@@ -84,8 +95,8 @@ list_rows() {
             age='?'
         fi
 
-        printf '%s %s \e[1m%-*s\e[0m      \e[2m%s\e[0m\t%s\n' \
-            "$dot" "$marker" "$width" "$n" "$age" "$n"
+        printf '%s %s \e[1m%-*s\e[0m      \e[2m%s\e[0m%s\t%s\n' \
+            "$dot" "$marker" "$width" "$n" "$age" "$(role_tag "$role")" "$n"
     done <<< "$sorted"
 }
 
@@ -113,6 +124,17 @@ remove_worktree() {
     disown 2>/dev/null
 }
 
+archive_handoff() {
+    # Move a task's handoff note into the archive. The report is a durable record
+    # and is left untouched — only the transient handoff is tidied away.
+    local sess=$1
+    local src="$HOME/notes/handoff/$sess.md"
+    [[ -f "$src" ]] || return
+    mkdir -p "$HOME/notes/handoff/archive"
+    mv "$src" "$HOME/notes/handoff/archive/$sess.md" 2>/dev/null \
+        && echo "archived handoff → notes/handoff/archive/$sess.md"
+}
+
 confirm_kill_session() {
     local sess=$1
     [[ -z "$sess" ]] && return
@@ -128,8 +150,9 @@ confirm_kill_session() {
         return
     fi
 
-    local a kill_it=0 wipe_wt=0
+    local a kill_it=0 wipe_wt=0 arch_ho=0
     local wt="$HOME/claude-worktrees/$sess"
+    local ho="$HOME/notes/handoff/$sess.md"
 
     printf 'kill session %s? [y/N] ' "$sess"
     read -r a
@@ -142,9 +165,16 @@ confirm_kill_session() {
         [[ "$a" == "y" || "$a" == "Y" ]] && wipe_wt=1
     fi
 
-    # Defer destructive actions until both confirms are collected.
+    if [[ -f "$ho" ]]; then
+        printf 'archive handoff %s? [y/N] ' "$ho"
+        read -r a
+        [[ "$a" == "y" || "$a" == "Y" ]] && arch_ho=1
+    fi
+
+    # Defer actions until all confirms are collected.
     (( kill_it ))  && tmux kill-session -t "$sess"
     (( wipe_wt ))  && remove_worktree "$wt"
+    (( arch_ho ))  && archive_handoff "$sess"
 }
 
 # Recursively emit all descendant PIDs of a process.
